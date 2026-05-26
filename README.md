@@ -1,28 +1,29 @@
-# 🎯 code-debloater
+<h1 align="center">code-debloater</h1>
 
-**ast-driven structural code-bloat scanner** powered by **nvidia nim (deepseek v4 pro)**.
+<p align="center"><strong>ast-driven structural code-bloat scanner</strong> powered by <strong>nvidia nim (deepseek v4 pro)</strong>.</p>
 
-detects duplicate logic, lazy placeholders, ai-generated stubs, and todo debt — then auto-fixes them with production-grade code via nvidia's hosted inference api. no local models, no gpu needed.
+<p align="center">detects duplicate logic, lazy placeholders, ai-generated stubs, and todo debt — then auto-fixes them with production-grade code via nvidia's hosted inference api. no local models, no gpu needed.</p>
 
-this is a fork of [zenapta/bloathunter](https://github.com/zenapta/BloatHunter) by shashank bhardwaj. the original used ollama + llama 3 locally; this version uses nvidia nim (deepseek v4 pro) — no local llm required.
+<p align="center">this is a fork of <a href="https://github.com/zenapta/BloatHunter">zenapta/bloathunter</a> by shashank bhardwaj. the original used ollama + llama 3 locally; this version uses nvidia nim (deepseek v4 pro) — no local llm required.</p>
 
----
+<hr>
 
-## 🔥 features
+<h2 align="center">features</h2>
 
-- **🧠 ast structural analysis** — uses the typescript compiler api to normalize function bodies (strips variable names, formatting, string/number literals) so it finds true copy-pasted duplicates even when variables are renamed.
-- **🤖 nvidia nim auto-fixes** — connects to deepseek v4 pro via nvidia's hosted api (`integrate.api.nvidia.com`). free tier available. no local llm, no ollama, no gpu required.
-- **🔍 smart placeholder detection** — 30+ patterns for ai-generated stubs, lazy todos, unimplemented code, and hidden technical debt. catches generated-by-ai comments, "insert logic here", "not implemented" errors, and more.
-- **📐 duplicate refactoring strategies** — for each duplicate cluster, gets deepseek v4 pro to generate a concrete extraction plan with import paths and shared function signatures.
-- **🚦 health scoring** — grades your codebase a–f with severity levels (low → critical) so you know where to focus.
-- **🏃 dry-run mode** — `--dry-run` shows colored diffs of what would change without touching files.
+<ul>
+<li><strong>ast structural analysis</strong> — uses the typescript compiler api to normalize function bodies (strips variable names, formatting, string/number literals) so it finds true copy-pasted duplicates even when variables are renamed.</li>
+<li><strong>nvidia nim auto-fixes</strong> — connects to deepseek v4 pro via nvidia's hosted api (<code>integrate.api.nvidia.com</code>). free tier available. no local llm, no ollama, no gpu required.</li>
+<li><strong>smart placeholder detection</strong> — 30+ patterns for ai-generated stubs, lazy todos, unimplemented code, and hidden technical debt. catches generated-by-ai comments, "insert logic here", "not implemented" errors, and more.</li>
+<li><strong>duplicate refactoring strategies</strong> — for each duplicate cluster, gets deepseek v4 pro to generate a concrete extraction plan with import paths and shared function signatures.</li>
+<li><strong>health scoring</strong> — grades your codebase a–f with severity levels (low → critical) so you know where to focus.</li>
+<li><strong>dry-run mode</strong> — <code>--dry-run</code> shows colored diffs of what would change without touching files.</li>
+</ul>
 
----
+<hr>
 
-## 🚀 quick start
+<h2 align="center">quick start</h2>
 
-```bash
-# set your nvidia api key
+<pre><code># set your nvidia api key
 export NVIDIA_API_KEY=nvapi-...
 
 # run it (scans current directory)
@@ -31,21 +32,22 @@ npx code-debloater
 # or install globally
 npm install -g code-debloater
 code-debloater ./src
-```
+</code></pre>
 
-### get a free api key
+<h3 align="center">get a free api key</h3>
 
-1. go to [integrate.nvidia.com](https://integrate.nvidia.com)
-2. sign up / log in
-3. navigate to the api section and generate a free api key
-4. deepseek v4 pro is available on the free tier with rate limits
+<ol>
+<li>go to <a href="https://integrate.nvidia.com">integrate.nvidia.com</a></li>
+<li>sign up / log in</li>
+<li>navigate to the api section and generate a free api key</li>
+<li>deepseek v4 pro is available on the free tier with rate limits</li>
+</ol>
 
----
+<hr>
 
-## 📋 usage
+<h2 align="center">usage</h2>
 
-```
-code-debloater [options] [directory]
+<pre><code>code-debloater [options] [directory]
 
 options:
   --dry-run, --dry           preview fixes without writing
@@ -53,12 +55,12 @@ options:
   --yes, -y                  non-interactive auto-fix
   --verbose, -v              detailed per-file progress
   --json                     structured json output (ci)
-  --output, -o <file>        write results to file
-  --exclude, -x <patterns>   glob exclude patterns (comma-sep)
-  --model, -m <name>         nim model (default: deepseek-ai/deepseek-v4-pro)
-  --max-concurrent <n>       parallel nim requests (default: 3)
-  --threshold <n>            minimum health score (0-100)
-  --max-function-lines <n>   warn on functions over n lines (default: 60)
+  --output, -o &lt;file&gt;        write results to file
+  --exclude, -x &lt;patterns&gt;   glob exclude patterns (comma-sep)
+  --model, -m &lt;name&gt;         nim model (default: deepseek-ai/deepseek-v4-pro)
+  --max-concurrent &lt;n&gt;       parallel nim requests (default: 3)
+  --threshold &lt;n&gt;            minimum health score (0-100)
+  --max-function-lines &lt;n&gt;   warn on functions over n lines (default: 60)
   --init                     scaffold .code-debloaterrc
   --version                  print version
   --help, -h                 show this help
@@ -69,12 +71,11 @@ environment:
 
 config file (auto-loaded):
   .code-debloaterrc           project-specific settings (json)
-```
+</code></pre>
 
-### examples
+<h3 align="center">examples</h3>
 
-```bash
-# scan current directory interactively
+<pre><code># scan current directory interactively
 code-debloater
 
 # audit only — no fixes
@@ -94,28 +95,32 @@ code-debloater --yes --max-concurrent 5
 
 # scaffold a config file
 code-debloater --init
-```
+</code></pre>
 
----
+<hr>
 
-## 🔬 what it detects
+<h2 align="center">what it detects</h2>
 
-| category | examples |
-|----------|----------|
-| **lazy todos** | `// TODO: implement later`, `// FIXME: needs work` |
-| **ai-generated stubs** | `// generated by claude`, `// auto-generated stub` |
-| **incomplete code** | `// insert logic here`, `// add your own code` |
-| **unimplemented** | `throw new Error('Not implemented')`, `// needs implementation` |
-| **placeholders** | `// your code goes here`, `// ... implement this` |
-| **structural duplicates** | functions with identical ast bodies (variable names ignored) |
-| **oversized functions** | functions exceeding `--max-function-lines` (default: 60) |
+<table>
+  <thead>
+    <tr><th>category</th><th>examples</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>lazy todos</strong></td><td><code>// TODO: implement later</code>, <code>// FIXME: needs work</code></td></tr>
+    <tr><td><strong>ai-generated stubs</strong></td><td><code>// generated by claude</code>, <code>// auto-generated stub</code></td></tr>
+    <tr><td><strong>incomplete code</strong></td><td><code>// insert logic here</code>, <code>// add your own code</code></td></tr>
+    <tr><td><strong>unimplemented</strong></td><td><code>throw new Error('Not implemented')</code>, <code>// needs implementation</code></td></tr>
+    <tr><td><strong>placeholders</strong></td><td><code>// your code goes here</code>, <code>// ... implement this</code></td></tr>
+    <tr><td><strong>structural duplicates</strong></td><td>functions with identical ast bodies (variable names ignored)</td></tr>
+    <tr><td><strong>oversized functions</strong></td><td>functions exceeding <code>--max-function-lines</code> (default: 60)</td></tr>
+  </tbody>
+</table>
 
----
+<hr>
 
-## 🏗 architecture
+<h2 align="center">architecture</h2>
 
-```
-src/
+<pre><code>src/
 ├── index.ts                  # entry point + cli flag parsing
 ├── config.ts                 # config loader (.code-debloaterrc + env + cli)
 ├── ai/
@@ -132,36 +137,42 @@ src/
 │       ├── astUtils.ts       # shared ast helpers (no source-code duplication)
 │       ├── bloatScanner.ts   # oversized function detection
 │       └── commentScanner.ts # regex-based placeholder/todo detection
-```
+</code></pre>
 
-### how duplicates work
+<h3 align="center">how duplicates work</h3>
 
-1. **extract** — every function/method/arrow function is parsed from js/ts files using the typescript compiler api.
-2. **normalize** — variable names → `__id1, __id2`, string literals → `__str`, numbers → `0`. this strips cosmetic differences.
-3. **cluster** — functions with identical normalized bodies are grouped.
-4. **report** — clusters with 2+ members are reported as duplicates.
-5. **fix** — deepseek v4 pro generates a refactoring strategy for each cluster.
+<ol>
+<li><strong>extract</strong> — every function/method/arrow function is parsed from js/ts files using the typescript compiler api.</li>
+<li><strong>normalize</strong> — variable names → <code>__id1, __id2</code>, string literals → <code>__str</code>, numbers → <code>0</code>. this strips cosmetic differences.</li>
+<li><strong>cluster</strong> — functions with identical normalized bodies are grouped.</li>
+<li><strong>report</strong> — clusters with 2+ members are reported as duplicates.</li>
+<li><strong>fix</strong> — deepseek v4 pro generates a refactoring strategy for each cluster.</li>
+</ol>
 
----
+<hr>
 
-## ⚡ compared to local models
+<h2 align="center">compared to local models</h2>
 
-| | ollama (local llama) | code-debloater (nvidia nim) |
-|---|---|---|
-| **gpu needed** | yes (or very slow on cpu) | no |
-| **setup** | install ollama, pull model | just set `NVIDIA_API_KEY` |
-| **speed** | depends on hardware | ~1-3s per fix on nim |
-| **model** | llama 3 (8b/70b) | deepseek v4 pro (moe, 200b+) |
-| **quality** | decent for small fixes | production-grade code generation |
-| **cost** | free (your electricity) | free tier available |
-| **context window** | 8k–128k | 1m tokens |
+<table>
+  <thead>
+    <tr><th></th><th>ollama (local llama)</th><th>code-debloater (nvidia nim)</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>gpu needed</strong></td><td>yes (or very slow on cpu)</td><td>no</td></tr>
+    <tr><td><strong>setup</strong></td><td>install ollama, pull model</td><td>just set <code>NVIDIA_API_KEY</code></td></tr>
+    <tr><td><strong>speed</strong></td><td>depends on hardware</td><td>~1-3s per fix on nim</td></tr>
+    <tr><td><strong>model</strong></td><td>llama 3 (8b/70b)</td><td>deepseek v4 pro (moe, 200b+)</td></tr>
+    <tr><td><strong>quality</strong></td><td>decent for small fixes</td><td>production-grade code generation</td></tr>
+    <tr><td><strong>cost</strong></td><td>free (your electricity)</td><td>free tier available</td></tr>
+    <tr><td><strong>context window</strong></td><td>8k–128k</td><td>1m tokens</td></tr>
+  </tbody>
+</table>
 
----
+<hr>
 
-## 📦 development
+<h2 align="center">development</h2>
 
-```bash
-# clone and build
+<pre><code># clone and build
 git clone https://github.com/houseofmates/code-debloater
 cd code-debloater
 npm install
@@ -172,14 +183,14 @@ NVIDIA_API_KEY=nvapi-... npm run start -- ./test-sandbox
 
 # test with dry run
 NVIDIA_API_KEY=nvapi-... npm run start -- --dry-run ./test-sandbox
-```
+</code></pre>
 
----
+<hr>
 
-## 📄 license
+<h2 align="center">license</h2>
 
-mit — do whatever you want with it.
+<p align="center">mit — do whatever you want with it.</p>
 
-### credits
+<h3 align="center">credits</h3>
 
-forked from [zenapta/bloathunter](https://github.com/zenapta/BloatHunter) by shashank bhardwaj (mit license). the original project deservers credit for the ast scanning architecture and the concept of structural duplicate detection. this fork replaces the local ollama/llama 3 backend with nvidia nim (deepseek v4 pro) and adds extensive new features.
+<p align="center">forked from <a href="https://github.com/zenapta/BloatHunter">zenapta/bloathunter</a> by shashank bhardwaj (mit license). the original project deservers credit for the ast scanning architecture and the concept of structural duplicate detection. this fork replaces the local ollama/llama 3 backend with nvidia nim (deepseek v4 pro) and adds extensive new features.</p>
