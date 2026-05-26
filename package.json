@@ -1,16 +1,17 @@
 {
-  "name": "zenapta_bloathunter_cli",
+  "name": "code-debloater",
   "version": "1.0.0",
-  "description": "An AI-generated code bloat and placeholder scanner",
+  "description": "AST-driven structural code-bloat scanner powered by NVIDIA NIM (DeepSeek V4 Pro) that detects duplicate logic, lazy placeholders, and AI-generated stubs — then auto-fixes them.",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
-    "zenapta_bloathunter_cli": "./dist/index.js"
+    "code-debloater": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
     "lint": "eslint --fix src",
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",
@@ -23,5 +24,29 @@
     "eslint": "^9.10.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
-  }
+  },
+  "keywords": [
+    "code-quality",
+    "linting",
+    "debloat",
+    "duplicate-code",
+    "placeholder-detection",
+    "nvidia-nim",
+    "deepseek",
+    "ast",
+    "refactoring"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/houseofmates/code-debloater"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
 }

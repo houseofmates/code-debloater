@@ -51,7 +51,7 @@ function buildRecommendations(commentIssues: CommentIssue[], duplicateClusters: 
   }
 
   if (commentIssues.length === 0 && duplicateClusters.length === 0) {
-    recommendations.push('Maintain this quality by running Bloathunter regularly after every major feature or refactor.');
+    recommendations.push('Maintain this quality by running code-debloater regularly after every major feature or refactor.');
   }
 
   if (duplicateClusters.some((cluster) => cluster.length >= 3)) {

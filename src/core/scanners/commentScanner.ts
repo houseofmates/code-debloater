@@ -8,8 +8,9 @@ export interface CommentIssue {
 }
 
 const COMMENT_REGEX = /\/\/.*|\/\*[\s\S]*?\*\//g;
+
 const LAZY_AI_PATTERNS = [
-  /\bTODO\b[:\s]*(?:implement|fix|complete|later|actual|refactor|replace|finish)?/i,
+  /\bTODO\b[:\s]*(?:implement|fix|complete|later|actual|refactor|replace|finish|add|write|do|handle)?/i,
   /\bFIXME\b/i,
   /\bTBD\b/i,
   /\bHACK\b/i,
@@ -23,11 +24,22 @@ const LAZY_AI_PATTERNS = [
   /not\s+implemented/i,
   /pending\s+implementation/i,
   /temporary\s+stub/i,
-  /generated\s+by\s+(?:AI|OpenAI|GPT|ChatGPT)/i,
+  /generated\s+by\s+(?:AI|OpenAI|GPT|ChatGPT|Claude|Copilot)/i,
   /use\s+AI\s+to\s+generate/i,
   /unimplemented/i,
-  /throw\s+new\s+Error\(['"](?:Not implemented|TODO|Unimplemented)['"]\)/i,
-  /this\s+method\s+is\s+generated/i
+  /throw\s+new\s+Error\(['\"](?:Not implemented|TODO|Unimplemented|Not supported)['\"]\)/i,
+  /this\s+(?:method|function|code)\s+is\s+generated/i,
+  // Additional common AI stub patterns
+  /\/\/\s*\.\.\.\s*(?:implement|fill|complete|add)/i,
+  /\/\/\s*(?:your\s+)?code\s+(?:here|goes\s+here)/i,
+  /\/\/\s*implement\s+(?:this|the\s+\w+)/i,
+  /\bstub\b/i,
+  /\bWIP\b/i,
+  /needs\s+implementation/i,
+  /to\s+be\s+implemented/i,
+  /should\s+not\s+be\s+used/i,
+  /work\s+in\s+progress/i,
+  /require\s+implementation/i,
 ];
 
 const TODO_TAGS = [/\bTODO\b/i, /\bFIXME\b/i];
@@ -44,7 +56,7 @@ function normalizeCommentText(comment: string): string {
 }
 
 /**
- * Scans a file for lazy AI placeholder comments and returns any matches.
+ * Scans a file for lazy AI placeholder comments and returns matches.
  */
 export async function scanComments(filePath: string): Promise<CommentIssue[]> {
   const issues: CommentIssue[] = [];
@@ -64,7 +76,9 @@ export async function scanComments(filePath: string): Promise<CommentIssue[]> {
             filePath,
             line,
             text: comment,
-            type: TODO_TAGS.some((tag) => tag.test(comment)) ? 'todo' : 'placeholder'
+            type: TODO_TAGS.some((tag) => tag.test(comment))
+              ? 'todo'
+              : 'placeholder',
           });
           break;
         }

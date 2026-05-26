@@ -1,24 +1,26 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-// Directories that should always be skipped to keep the scan fast and relevant
 const IGNORED_DIRECTORIES = new Set([
   'node_modules',
   'dist',
   'build',
   '.git',
   '.next',
-  'coverage'
+  'coverage',
+  '.cache',
+  '.turbo',
+  '.vercel',
+  '__pycache__',
+  '.nyc_output',
+  '.serverless',
+  '.webpack',
 ]);
 
-// Extensions we want to target for AI placeholders and duplicates
-const TARGET_EXTENSIONS = /\.(js|ts|jsx|tsx)$/;
+const TARGET_EXTENSIONS = /\.(js|ts|jsx|tsx|mjs|cjs|mts|cts)$/;
 
 /**
- * Recursively crawls a target directory to find all JavaScript and TypeScript files.
- *
- * @param dir The starting absolute or relative directory path.
- * @returns A promise that resolves to an array of absolute file paths.
+ * Recursively crawls a target directory for JavaScript/TypeScript files.
  */
 export async function crawlDirectory(dir: string): Promise<string[]> {
   const fileList: string[] = [];
@@ -43,7 +45,7 @@ export async function crawlDirectory(dir: string): Promise<string[]> {
         }
       }
     } catch {
-      // Quietly bypass directories that cannot be read due to permissions
+      // Silently skip unreadable directories
     }
   }
 
