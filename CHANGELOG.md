@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1 — 2026-05-26
+
+### Fixed
+- Moved `typescript` from devDependencies to dependencies — required at runtime for AST scanning via npx
+
 ## 1.0.0 — 2026-05-26
 
 This is a fork of [zenapta/BloatHunter](https://github.com/zenapta/BloatHunter). Full rewrite of the AI backend and major UX/feature expansion.
