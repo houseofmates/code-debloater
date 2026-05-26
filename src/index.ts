@@ -9,15 +9,18 @@ import { scanBloat, type BloatIssue } from './core/scanners/bloatScanner.js';
 import { calculateAuditSummary } from './core/issueScorer.js';
 import { loadConfig as loadNimConfig, type NIMConfig } from './ai/nimConnector.js';
 import { runFixes, analyzeDuplicateCluster } from './core/fixer.js';
-import { renderJsonReport, renderCsvReport } from './cli/output.js';
+import { runPolish } from './core/polisher.js';
+import { renderJsonReport } from './cli/output.js';
 import {
   renderIntro,
   createSpinner,
   renderReport,
   renderDiff,
   renderFixSummary,
+  renderPolishSummary,
   renderFileBreakdown,
   promptForFix,
+  promptForPolish,
   renderMessage,
   renderOutro,
 } from './cli/interface.js';
@@ -26,20 +29,12 @@ async function main(): Promise<void> {
   const { config, targetDir, action } = await loadConfig(process.argv.slice(2));
 
   // --- Special actions ---
-  if (action === 'help') {
-    renderHelp();
-    process.exit(0);
-  }
-
-  if (action === 'version') {
-    console.log(`code-debloater v${VERSION}`);
-    process.exit(0);
-  }
-
+  if (action === 'help') { renderHelp(); process.exit(0); }
+  if (action === 'version') { console.log(`code-debloater v${VERSION}`); process.exit(0); }
   if (action === 'init') {
     renderIntro();
     await renderInitConfig(targetDir);
-    renderOutro('Config created! Edit .code-debloaterrc to tweak defaults.');
+    renderOutro('config created! edit .code-debloaterrc to tweak defaults.');
     process.exit(0);
   }
 
@@ -48,16 +43,16 @@ async function main(): Promise<void> {
   renderIntro();
 
   // --- Step 1: Crawl ---
-  s.start('Crawling project files...');
+  s.start('crawling project files...');
   const files = await crawlDirectory(targetDir, config.exclude, config.respectGitignore);
 
   if (files.length === 0) {
-    s.stop('No JS/TS files found.');
-    renderOutro('Nothing to scan.');
+    s.stop('no js/ts files found.');
+    renderOutro('nothing to scan.');
     process.exit(0);
   }
 
-  s.message(`Scanning ${files.length} files...`);
+  s.message(`scanning ${files.length} files...`);
 
   // --- Step 2: Scan ---
   const allCommentIssues: CommentIssue[] = [];
@@ -81,7 +76,7 @@ async function main(): Promise<void> {
   const duplicateClusters = findDuplicates(allFunctions);
   const summary = calculateAuditSummary(allCommentIssues, duplicateClusters);
 
-  s.stop('Scan complete!');
+  s.stop('scan complete.');
 
   const scanMeta = {
     scannedFiles: files.length,
@@ -95,7 +90,7 @@ async function main(): Promise<void> {
   if (allBloatIssues.length > 0 && config.verbose) {
     for (const b of allBloatIssues) {
       renderMessage(
-        `  📏 ${b.filePath}:${b.line} — ${b.name}() is ${b.lines} lines (limit: ${config.maxFunctionLines})`,
+        `  📏 ${shortenPath(b.filePath)}:${b.line} — ${b.name}() is ${b.lines} lines (limit: ${config.maxFunctionLines})`,
         'warn',
       );
     }
@@ -105,28 +100,29 @@ async function main(): Promise<void> {
     renderFileBreakdown(allCommentIssues, duplicateClusters);
   }
 
-  // --- Handle JSON/CSV output ---
+  // --- JSON/CSV output ---
   if (config.outputFormat === 'json') {
     const json = renderJsonReport(allCommentIssues, duplicateClusters, summary, null, scanMeta);
     if (config.outputFile) {
       const { writeFile } = await import('fs/promises');
       await writeFile(config.outputFile, json, 'utf-8');
-      renderMessage(`Report written to ${config.outputFile}`, 'success');
+      renderMessage(`report written to ${config.outputFile}`, 'success');
     } else {
       console.log(json);
     }
     process.exit(summary.severity === 'critical' ? 1 : 0);
   }
 
-  // --- Exit if nothing to fix ---
-  if (allCommentIssues.length === 0 && duplicateClusters.length === 0) {
-    renderOutro('Zero bloat — pristine!');
+  const hasIssues = allCommentIssues.length > 0 || duplicateClusters.length > 0;
+
+  if (!hasIssues && !config.polish) {
+    renderOutro('zero bloat — pristine!');
     process.exit(0);
   }
 
   if (config.scanOnly) {
-    renderMessage('Scan complete. Run without --scan-only to auto-fix.', 'info');
-    renderOutro('code-debloater — audit finished.');
+    renderMessage('scan complete. run without --scan-only to auto-fix.', 'info');
+    renderOutro('audit finished.');
     process.exit(summary.severity === 'high' || summary.severity === 'critical' ? 1 : 0);
   }
 
@@ -137,56 +133,54 @@ async function main(): Promise<void> {
     if (config.model) nimConfig.model = config.model;
   } catch (err) {
     renderMessage(
-      err instanceof Error ? err.message : 'Failed to load NVIDIA NIM config',
+      err instanceof Error ? err.message : 'failed to load nvidia nim config',
       'error',
     );
     process.exit(1);
   }
 
-  // --- Step 6: Prompt for fix ---
-  const shouldFix = config.autoFix ? true : await promptForFix(nimConfig.model);
-
-  if (!shouldFix) {
-    renderMessage('No fixes applied.', 'info');
-    renderOutro('Run again anytime.');
-    process.exit(0);
-  }
-
   if (config.dryRun) {
-    renderMessage('🔍 DRY RUN — no files will be modified.', 'warn');
+    renderMessage('🔍 dry run — no files will be modified.', 'warn');
   }
 
-  // --- Step 7: Fix placeholders ---
-  const items = allCommentIssues.map((issue) => ({
+  // --- Step 6: Fix placeholders ---
+  const placeholderItems = allCommentIssues.map((issue) => ({
     path: issue.filePath,
     line: issue.line,
     text: issue.text,
   }));
 
-  if (items.length > 0) {
-    s.start(`Fixing ${items.length} placeholders via ${nimConfig.model}...`);
+  let fixResults: Awaited<ReturnType<typeof runFixes>> = [];
 
-    const results = await runFixes(items, nimConfig, config.dryRun, config.maxConcurrent, (done, total, current) => {
-      s.message(`Fixing placeholders (${done}/${total}) — ${current}`);
-    });
+  if (placeholderItems.length > 0) {
+    const shouldFix = config.autoFix ? true : await promptForFix(nimConfig.model);
 
-    s.stop('Placeholder fixes complete.');
+    if (shouldFix) {
+      s.start(`fixing ${placeholderItems.length} placeholders via ${nimConfig.model}...`);
 
-    // Render diffs in dry-run mode
-    if (config.dryRun) {
-      for (const r of results) {
-        if (r.status === 'skipped' && r.originalContent && r.newContent) {
-          renderDiff(r.filePath, r.originalContent, r.newContent);
+      fixResults = await runFixes(placeholderItems, nimConfig, config.dryRun, config.maxConcurrent, (done, total, current) => {
+        s.message(`fixing placeholders (${done}/${total}) — ${current}`);
+      });
+
+      s.stop('placeholder fixes complete.');
+
+      if (config.dryRun) {
+        for (const r of fixResults) {
+          if (r.status === 'skipped' && r.originalContent && r.newContent) {
+            renderDiff(r.filePath, r.originalContent, r.newContent);
+          }
         }
       }
-    }
 
-    renderFixSummary(results);
+      renderFixSummary(fixResults);
+    } else {
+      renderMessage('no placeholder fixes applied.', 'info');
+    }
   }
 
-  // --- Step 8: Analyze duplicates ---
+  // --- Step 7: Analyze duplicates ---
   if (duplicateClusters.length > 0) {
-    s.start('Analyzing duplicate logic...');
+    s.start('analyzing duplicate logic...');
 
     for (let i = 0; i < duplicateClusters.length; i++) {
       const cluster = duplicateClusters[i];
@@ -195,7 +189,7 @@ async function main(): Promise<void> {
       const fn1 = cluster[0];
       const fn2 = cluster[1];
 
-      s.message(`Analyzing duplicate cluster #${i + 1}...`);
+      s.message(`analyzing duplicate cluster #${i + 1}...`);
 
       try {
         const strategy = await analyzeDuplicateCluster(
@@ -203,22 +197,91 @@ async function main(): Promise<void> {
           { filePath: fn2.filePath, line: fn2.line, name: fn2.name },
           nimConfig,
         );
-        renderMessage(`\n📐 Refactor Strategy — Cluster #${i + 1}:${strategy}`, 'info');
+        renderMessage(`\n📐 refactor strategy — cluster #${i + 1}:${strategy}`, 'info');
       } catch (err) {
         renderMessage(
-          `  ❌ Analysis failed for cluster #${i + 1}: ${err instanceof Error ? err.message : String(err)}`,
+          `  ❌ analysis failed for cluster #${i + 1}: ${err instanceof Error ? err.message : String(err)}`,
           'error',
         );
       }
     }
 
-    s.stop('Duplicate analysis complete.');
+    s.stop('duplicate analysis complete.');
+  }
+
+  // --- Step 8: Polish pass (code quality improvement) ---
+  if (config.polish) {
+    // Collect all unique files that have any kind of issue
+    const flaggedFiles = new Set<string>();
+
+    for (const issue of allCommentIssues) flaggedFiles.add(issue.filePath);
+    for (const cluster of duplicateClusters) {
+      for (const fn of cluster) flaggedFiles.add(fn.filePath);
+    }
+    for (const bloat of allBloatIssues) flaggedFiles.add(bloat.filePath);
+
+    // If there were placeholder fixes, add those files too (they may have been rewritten)
+    for (const r of fixResults) {
+      if (r.status === 'fixed' || r.status === 'skipped') flaggedFiles.add(r.filePath);
+    }
+
+    const flaggedList = [...flaggedFiles].sort();
+
+    if (flaggedList.length > 0) {
+      const shouldPolish = config.autoFix ? true : await promptForPolish();
+
+      if (shouldPolish) {
+        s.message(`polishing ${flaggedList.length} files...`);
+        s.start('running deep code quality improvement pass...');
+
+        const polishResults = await runPolish(
+          flaggedList,
+          nimConfig,
+          config.dryRun,
+          config.maxConcurrent,
+          (done, total, current) => {
+            s.message(`polishing code (${done}/${total}) — ${current}`);
+          },
+        );
+
+        s.stop('polish pass complete.');
+
+        // Render diffs in dry-run mode
+        if (config.dryRun) {
+          for (const r of polishResults) {
+            if (r.status === 'improved') {
+              renderDiff(r.filePath, r.originalContent, r.newContent);
+            }
+          }
+        }
+
+        renderPolishSummary(polishResults);
+
+        // Show per-file improvement details
+        const improved = polishResults.filter((r) => r.status === 'improved');
+        if (improved.length > 0 && config.verbose) {
+          renderMessage(`\n  files improved:`, 'info');
+          for (const r of improved) {
+            renderMessage(`  ✓ ${shortenPath(r.filePath)}`, 'success');
+          }
+          console.log();
+        }
+      } else {
+        renderMessage('polish pass skipped.', 'info');
+      }
+    } else {
+      renderMessage('no files flagged — nothing to polish.', 'info');
+    }
   }
 
   // --- Done ---
   const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-  renderMessage(`Completed in ${totalTime}s across ${files.length} files.`, 'success');
-  renderOutro('Leaner, meaner, cleaner!');
+  renderMessage(`completed in ${totalTime}s across ${files.length} files.`, 'success');
+  renderOutro('leaner, meaner, cleaner!');
+}
+
+function shortenPath(fp: string): string {
+  return fp.split('/').slice(-3).join('/');
 }
 
 main().catch((err) => {

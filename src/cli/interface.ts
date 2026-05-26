@@ -4,11 +4,12 @@ import type { CommentIssue } from '../core/scanners/commentScanner.js';
 import type { FunctionInfo } from '../core/scanners/astScanner.js';
 import type { AuditSummary } from '../core/issueScorer.js';
 import type { FixResult } from '../core/fixer.js';
+import type { PolishResult } from '../core/polisher.js';
 import { VERSION } from '../config.js';
 
 export function renderIntro(): void {
-  p.intro(pc.bgCyan(pc.black(' CODE-DEBLOATER ')));
-  p.log.info(pc.dim(`v${VERSION} · AST bloat scanner · NVIDIA NIM (DeepSeek V4 Pro)`));
+  p.intro(pc.bgCyan(pc.black(' code-debloater ')));
+  p.log.info(pc.dim(`v${VERSION} · ast bloat scanner · nvidia nim (deepseek v4 pro)`));
 }
 
 export function createSpinner() {
@@ -41,28 +42,27 @@ export function renderReport(
 
   p.note(
     [
-      `${pc.bold('Audit Report')}`,
+      `${pc.bold('audit report')}`,
       `  • ${pc.yellow(String(commentIssues.length))} placeholder/todo comments`,
       `  • ${pc.red(String(duplicateClusters.length))} duplicate logic clusters`,
       `  • ${pc.green(String(commentIssues.length + duplicateClusters.length))} total issues`,
-      `  • ${pc.bold('Health:')} ${renderHealthBar(summary.healthScore)} ${pc.bold(String(summary.healthScore))}/100 (${pc.bold(summary.grade)})`,
-      `  • ${pc.bold('Severity:')} ${severityLabel}`,
+      `  • ${pc.bold('health:')} ${renderHealthBar(summary.healthScore)} ${pc.bold(String(summary.healthScore))}/100 (${pc.bold(summary.grade)})`,
+      `  • ${pc.bold('severity:')} ${severityLabel}`,
     ].join('\n'),
-    color('Analysis Complete'),
+    color('analysis complete'),
   );
 
   if (summary.strengths.length > 0) {
-    p.log.success(pc.green('Strengths:'));
+    p.log.success(pc.green('strengths:'));
     for (const s of summary.strengths) p.log.step(`  • ${s}`);
   }
   if (summary.risks.length > 0) {
-    p.log.warn(pc.yellow('Recommendations:'));
+    p.log.warn(pc.yellow('recommendations:'));
     for (const r of summary.risks) p.log.step(`  • ${r}`);
   }
 
-  // Placeholder issues
   if (commentIssues.length > 0) {
-    p.log.warn(pc.yellow(pc.bold('⚠  PLACEHOLDER & TODO ISSUES:')));
+    p.log.warn(pc.yellow(pc.bold('⚠  placeholder & todo issues:')));
     for (const issue of commentIssues) {
       const label = colorizeType(issue.type);
       const line = pc.magenta(String(issue.line));
@@ -74,11 +74,10 @@ export function renderReport(
     }
   }
 
-  // Duplicate clusters
   if (duplicateClusters.length > 0) {
-    p.log.error(pc.red(pc.bold('🚨 STRUCTURAL DUPLICATES:')));
+    p.log.error(pc.red(pc.bold('🚨 structural duplicates:')));
     for (const [idx, cluster] of duplicateClusters.entries()) {
-      p.log.step(`${pc.bold(`Cluster #${idx + 1}`)} — ${pc.yellow(String(cluster.length))} matches:`);
+      p.log.step(`${pc.bold(`cluster #${idx + 1}`)} — ${pc.yellow(String(cluster.length))} matches:`);
       for (const fn of cluster) {
         p.log.message(
           `   • ${pc.green(fn.name)}() in ${pc.cyan(shortenPath(fn.filePath))}:${pc.magenta(String(fn.line))}`,
@@ -86,8 +85,8 @@ export function renderReport(
       }
     }
     p.note(
-      'AST-normalized (variable names & literals stripped). Renamed variables do not hide duplicates.',
-      'Duplicate Detector',
+      'ast-normalized (variable names & literals stripped). renamed variables do not hide duplicates.',
+      'duplicate detector',
     );
   }
 }
@@ -104,7 +103,15 @@ function renderHealthBar(score: number): string {
 
 export async function promptForFix(model: string): Promise<boolean> {
   const choice = await p.confirm({
-    message: `Fix placeholders with NVIDIA NIM (${model})?`,
+    message: `fix placeholders with nvidia nim (${model})?`,
+    initialValue: true,
+  });
+  return typeof choice === 'boolean' ? choice : false;
+}
+
+export async function promptForPolish(): Promise<boolean> {
+  const choice = await p.confirm({
+    message: 'run deep code quality improvement pass on flagged files?',
     initialValue: true,
   });
   return typeof choice === 'boolean' ? choice : false;
@@ -129,7 +136,7 @@ export function renderMessage(
   }
 }
 
-export function renderOutro(msg = 'Code lean, mean, and clean!'): void {
+export function renderOutro(msg = 'code lean, mean, and clean!'): void {
   p.outro(pc.bgCyan(pc.black(` ${msg} `)));
 }
 
@@ -147,9 +154,6 @@ export function renderDiff(
 
   console.log(pc.cyan(`\n  ── ${short} ──`));
 
-  // Simple diff: compare line by line
-  const maxLines = Math.max(origLines.length, newLines.length);
-  let context = 0;
   let contextBuf: Array<{ type: string; line: string }> = [];
 
   function flushContext() {
@@ -165,24 +169,18 @@ export function renderDiff(
     contextBuf = [];
   }
 
+  const maxLines = Math.max(origLines.length, newLines.length);
   for (let i = 0; i < maxLines; i++) {
     const o = i < origLines.length ? origLines[i] : null;
     const n = i < newLines.length ? newLines[i] : null;
 
     if (o === n) {
       contextBuf.push({ type: 'same', line: o! });
-      if (contextBuf.length > 6) {
-        flushContext();
-      }
+      if (contextBuf.length > 6) flushContext();
     } else {
       flushContext();
-      if (o !== null) {
-        console.log(pc.red(`  - ${o}`));
-      }
-      if (n !== null) {
-        console.log(pc.green(`  + ${n}`));
-      }
-      context = 0;
+      if (o !== null) console.log(pc.red(`  - ${o}`));
+      if (n !== null) console.log(pc.green(`  + ${n}`));
     }
   }
   flushContext();
@@ -205,10 +203,7 @@ export function renderFixSummary(results: FixResult[]): void {
   if (skipped > 0) parts.push(pc.blue(`${skipped} previewed`));
   if (errors > 0) parts.push(pc.red(`${errors} errors`));
 
-  p.note(
-    parts.join(' · '),
-    'Fix Results',
-  );
+  p.note(parts.join(' · '), 'fix results');
 
   if (errors > 0) {
     for (const r of results) {
@@ -217,6 +212,25 @@ export function renderFixSummary(results: FixResult[]): void {
       }
     }
   }
+}
+
+/**
+ * Render polish pass results.
+ */
+export function renderPolishSummary(results: PolishResult[]): void {
+  const improved = results.filter((r) => r.status === 'improved').length;
+  const unchanged = results.filter((r) => r.status === 'unchanged').length;
+  const errors = results.filter((r) => r.status === 'error').length;
+  const total = results.length;
+
+  if (total === 0) return;
+
+  const parts: string[] = [];
+  if (improved > 0) parts.push(pc.green(`${improved} improved`));
+  if (unchanged > 0) parts.push(pc.dim(`${unchanged} already clean`));
+  if (errors > 0) parts.push(pc.red(`${errors} errors`));
+
+  p.note(parts.join(' · '), 'polish results');
 }
 
 /**
@@ -245,7 +259,7 @@ export function renderFileBreakdown(
 
   if (fileMap.size === 0) return;
 
-  p.log.info(pc.bold(pc.cyan('\n  Per-File Breakdown:')));
+  p.log.info(pc.bold(pc.cyan('\n  per-file breakdown:')));
   const sorted = [...fileMap.entries()].sort((a, b) => {
     const sumA = a[1].placeholders + a[1].todos + a[1].duplicates;
     const sumB = b[1].placeholders + b[1].todos + b[1].duplicates;
@@ -254,9 +268,9 @@ export function renderFileBreakdown(
 
   for (const [file, counts] of sorted) {
     const parts: string[] = [];
-    if (counts.placeholders > 0) parts.push(pc.yellow(`P:${counts.placeholders}`));
-    if (counts.todos > 0) parts.push(pc.red(`T:${counts.todos}`));
-    if (counts.duplicates > 0) parts.push(pc.magenta(`D:${counts.duplicates}`));
+    if (counts.placeholders > 0) parts.push(pc.yellow(`p:${counts.placeholders}`));
+    if (counts.todos > 0) parts.push(pc.red(`t:${counts.todos}`));
+    if (counts.duplicates > 0) parts.push(pc.magenta(`d:${counts.duplicates}`));
     p.log.message(`  ${pc.cyan(shortenPath(file))}  ${parts.join(' · ')}`);
   }
   console.log();

@@ -8,6 +8,7 @@ export interface CodeDebloaterConfig {
   outputFile: string;
   dryRun: boolean;
   scanOnly: boolean;
+  polish: boolean;
   verbose: boolean;
   maxConcurrent: number;
   threshold: number;
@@ -23,6 +24,7 @@ export const DEFAULTS: CodeDebloaterConfig = {
   outputFile: '',
   dryRun: false,
   scanOnly: false,
+  polish: false,
   verbose: false,
   maxConcurrent: 3,
   threshold: 0,
@@ -61,6 +63,10 @@ function parseArgs(argv: string[]): CliResult {
       case '--no-fix':
         flags.scanOnly = true;
         break;
+      case '--polish':
+      case '--improve':
+        flags.polish = true;
+        break;
       case '--verbose':
       case '-v':
         flags.verbose = true;
@@ -96,7 +102,6 @@ function parseArgs(argv: string[]): CliResult {
         flags.maxFunctionLines = parseInt(argv[++i] || '60', 10) || 60;
         break;
       case '--init':
-        flags.dryRun = true; // abuse dry-run flag to signal init
         positional.push('__INIT__');
         break;
       case '--version':
@@ -124,17 +129,14 @@ function mergeConfig(
 ): CodeDebloaterConfig {
   const merged = { ...DEFAULTS, ...config, ...cliFlags };
 
-  // CLI flags should override config file for booleans
-  // (config file sets true, CLI sets false — CLI wins)
+  // CLI booleans override config file
   if (cliFlags.dryRun !== undefined) merged.dryRun = cliFlags.dryRun;
   if (cliFlags.scanOnly !== undefined) merged.scanOnly = cliFlags.scanOnly;
+  if (cliFlags.polish !== undefined) merged.polish = cliFlags.polish;
   if (cliFlags.verbose !== undefined) merged.verbose = cliFlags.verbose;
   if (cliFlags.autoFix !== undefined) merged.autoFix = cliFlags.autoFix;
 
   // Environment overrides
-  if (process.env.NVIDIA_API_KEY && !cliFlags.model) {
-    // model isn't overridden by API_KEY
-  }
   if (process.env.CODE_DEBLOATER_MODEL && !cliFlags.model) {
     merged.model = process.env.CODE_DEBLOATER_MODEL;
   }
@@ -149,19 +151,16 @@ export async function loadConfig(argv: string[]): Promise<{
 }> {
   const { flags: cliFlags, targetDir, positional } = parseArgs(argv);
 
-  // Handle special actions
   for (const p of positional) {
     if (p === '__INIT__') return { config: DEFAULTS, targetDir: '.', action: 'init' };
     if (p === '__VERSION__') return { config: DEFAULTS, targetDir: '.', action: 'version' };
     if (p === '__HELP__') return { config: DEFAULTS, targetDir: '.', action: 'help' };
   }
 
-  // Try loading config from target dir upward
   let fileConfig: Partial<CodeDebloaterConfig> = {};
   const searchPaths = [
     join(targetDir, '.code-debloaterrc'),
     join(targetDir, '.code-debloaterrc.json'),
-    join(targetDir, '.cdeb.json'),
   ];
   for (const p of searchPaths) {
     const found = await tryReadConfig(p);
@@ -177,45 +176,47 @@ export async function loadConfig(argv: string[]): Promise<{
 
 export function renderHelp(): void {
   console.log(`
-  code-debloater  —  AST-driven code-bloat scanner + NVIDIA NIM auto-fixer
+  code-debloater  —  ast-driven code-bloat scanner + nvidia nim auto-fixer
 
-  Usage:
+  usage:
     code-debloater [options] [directory]
 
-  Options:
-    --dry-run, --dry          Preview fixes without writing changes
-    --scan-only, --no-fix     Audit only; skip the AI fix phase
-    --yes, -y                 Non-interactive auto-fix (no prompts)
-    --verbose, -v             Show detailed per-file progress
-    --json                    Output results as JSON (for CI)
-    --output, -o <file>       Write results to file
-    --exclude, -x <patterns>  Glob patterns to exclude (comma-sep)
-    --model, -m <name>        NVIDIA NIM model (default: deepseek-ai/deepseek-v4-pro)
-    --max-concurrent <n>      Max parallel NIM requests (default: 3)
-    --threshold <n>           Minimum health score to report (0-100)
-    --max-function-lines <n>  Warn on functions over N lines (default: 60)
-    --init                    Create a .code-debloaterrc config in current dir
-    --version                 Print version
-    --help, -h                Show this help
+  options:
+    --dry-run, --dry          preview fixes without writing
+    --scan-only, --no-fix     audit only; skip ai fixes
+    --polish, --improve       deep code quality improvement pass
+    --yes, -y                 non-interactive auto-fix
+    --verbose, -v             detailed per-file progress
+    --json                    structured json output (ci)
+    --output, -o <file>       write results to file
+    --exclude, -x <patterns>  glob exclude patterns (comma-sep)
+    --model, -m <name>        nim model (default: deepseek-ai/deepseek-v4-pro)
+    --max-concurrent <n>      parallel nim requests (default: 3)
+    --threshold <n>           minimum health score (0-100)
+    --max-function-lines <n>  warn on functions over n lines (default: 60)
+    --init                    scaffold .code-debloaterrc
+    --version                 print version
+    --help, -h                show this help
 
-  Environment:
-    NVIDIA_API_KEY            Required. Get yours from https://integrate.nvidia.com
-    CODE_DEBLOATER_MODEL      Model override (same as --model)
+  environment:
+    nvidia_api_key            required. get yours at https://integrate.nvidia.com
+    code_debloater_model      model override (same as --model)
 
-  Config file (auto-loaded):
-    .code-debloaterrc          Project-specific settings (JSON)
+  config file (auto-loaded):
+    .code-debloaterrc          project-specific settings (json)
 
-  Examples:
-    code-debloater                                    # scan + auto-fix
-    code-debloater --scan-only ./src                  # audit only
-    code-debloater --dry-run --verbose                # preview with details
-    code-debloater --json --output report.json        # CI-friendly output
-    code-debloater --exclude "test/**,vendor/**"      # skip test & vendor dirs
-    code-debloater --yes --max-concurrent 5           # fast unattended fixes
+  examples:
+    code-debloater                              # scan current dir
+    code-debloater --scan-only ./src             # audit only
+    code-debloater --polish --dry-run ./src      # preview code improvements
+    code-debloater --polish --yes ./src          # auto-improve code quality
+    code-debloater --json --output report.json   # ci report
+    code-debloater --exclude "test/**"           # skip test dirs
+    code-debloater --yes --max-concurrent 5      # fast unattended fixes
 `);
 }
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.0.3';
 
 export async function renderInitConfig(targetDir: string): Promise<void> {
   const config = {
@@ -227,6 +228,6 @@ export async function renderInitConfig(targetDir: string): Promise<void> {
 
   const path = join(targetDir, '.code-debloaterrc');
   await writeFile(path, JSON.stringify(config, null, 2) + '\n', 'utf-8');
-  console.log(`  ✓ Created ${path}`);
-  console.log(`  Edit it to tweak defaults for this project.\n`);
+  console.log(`  ✓ created ${path}`);
+  console.log(`  edit it to tweak defaults for this project.\n`);
 }
