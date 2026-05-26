@@ -1,235 +1,192 @@
 #!/usr/bin/env node
 
 import process from 'process';
-import { parseArgs } from 'util';
+import { loadConfig, renderHelp, renderInitConfig, VERSION, type CodeDebloaterConfig } from './config.js';
 import { crawlDirectory } from './core/crawler.js';
 import { scanComments, type CommentIssue } from './core/scanners/commentScanner.js';
 import { extractFunctions, findDuplicates, type FunctionInfo } from './core/scanners/astScanner.js';
+import { scanBloat, type BloatIssue } from './core/scanners/bloatScanner.js';
 import { calculateAuditSummary } from './core/issueScorer.js';
-import { loadConfig, fixPlaceholder, analyzeDuplicate, type NIMConfig } from './ai/nimConnector.js';
+import { loadConfig as loadNimConfig, type NIMConfig } from './ai/nimConnector.js';
+import { runFixes, analyzeDuplicateCluster } from './core/fixer.js';
+import { renderJsonReport, renderCsvReport } from './cli/output.js';
 import {
   renderIntro,
   createSpinner,
   renderReport,
+  renderDiff,
+  renderFixSummary,
+  renderFileBreakdown,
   promptForFix,
   renderMessage,
   renderOutro,
 } from './cli/interface.js';
 
-interface CliOptions {
-  dryRun: boolean;
-  model: string;
-  targetDir: string;
-  noFix: boolean;
-  verbose: boolean;
-}
+async function main(): Promise<void> {
+  const { config, targetDir, action } = await loadConfig(process.argv.slice(2));
 
-function parseCliOptions(): CliOptions {
-  const args = process.argv.slice(2);
-
-  let dryRun = false;
-  let noFix = false;
-  let verbose = false;
-  let model = '';
-  const positional: string[] = [];
-
-  for (let i = 0; i < args.length; i++) {
-    switch (args[i]) {
-      case '--dry-run':
-      case '--dry':
-        dryRun = true;
-        break;
-      case '--no-fix':
-      case '--scan-only':
-        noFix = true;
-        break;
-      case '--verbose':
-      case '-v':
-        verbose = true;
-        break;
-      case '--model':
-      case '-m':
-        model = args[++i] || '';
-        break;
-      case '--help':
-      case '-h':
-        renderHelp();
-        process.exit(0);
-      default:
-        if (!args[i].startsWith('-')) {
-          positional.push(args[i]);
-        }
-    }
+  // --- Special actions ---
+  if (action === 'help') {
+    renderHelp();
+    process.exit(0);
   }
 
-  return {
-    dryRun,
-    model,
-    targetDir: positional[0] || process.cwd(),
-    noFix,
-    verbose,
-  };
-}
+  if (action === 'version') {
+    console.log(`code-debloater v${VERSION}`);
+    process.exit(0);
+  }
 
-function renderHelp(): void {
-  console.log(`
-  code-debloater  —  AST-driven bloat scanner + NVIDIA NIM auto-fixer
+  if (action === 'init') {
+    renderIntro();
+    await renderInitConfig(targetDir);
+    renderOutro('Config created! Edit .code-debloaterrc to tweak defaults.');
+    process.exit(0);
+  }
 
-  Usage:
-    code-debloater [options] [directory]
-
-  Options:
-    --dry-run, --dry    Show what would be fixed without writing changes
-    --no-fix, --scan-only  Scan only; don't prompt for AI fixes
-    --model, -m <name>  NVIDIA NIM model override (default: deepseek-ai/deepseek-v4-pro)
-    --verbose, -v       Show detailed per-file progress
-    --help, -h          Show this help
-
-  Environment:
-    NVIDIA_API_KEY        Required. Get yours from https://integrate.nvidia.com
-    CODE_DEBLOATER_MODEL  Optional. Override the model (same as --model)
-
-  Examples:
-    code-debloater                       # Scan current directory
-    code-debloater ./src                 # Scan specific directory
-    code-debloater --dry-run ./src       # Dry run
-    code-debloater --model nvidia/nvidia-nemotron-super-49b-v1  # Use a different NIM model
-`);
-}
-
-async function main(): Promise<void> {
-  const options = parseCliOptions();
   const s = createSpinner();
-
+  const startTime = Date.now();
   renderIntro();
 
-  let config: NIMConfig | null = null;
-  if (!options.noFix) {
-    try {
-      config = loadConfig();
-      if (options.model) {
-        config.model = options.model;
-      }
-    } catch {
-      // Will check later when user wants to fix
-    }
-  }
-
-  // --- STEP 1 & 2: Crawl and Scan ---
+  // --- Step 1: Crawl ---
   s.start('Crawling project files...');
-  const files = await crawlDirectory(options.targetDir);
+  const files = await crawlDirectory(targetDir, config.exclude, config.respectGitignore);
 
   if (files.length === 0) {
-    s.stop('No valid JS/TS files found.');
+    s.stop('No JS/TS files found.');
     renderOutro('Nothing to scan.');
     process.exit(0);
   }
 
-  s.message(`Scanning ${files.length} files for bloat and placeholders...`);
+  s.message(`Scanning ${files.length} files...`);
 
+  // --- Step 2: Scan ---
   const allCommentIssues: CommentIssue[] = [];
+  const allBloatIssues: BloatIssue[] = [];
   let allFunctions: FunctionInfo[] = [];
 
-  // Process files in parallel
   await Promise.all(
     files.map(async (file) => {
-      const [comments, funcs] = await Promise.all([
+      const [comments, funcs, bloat] = await Promise.all([
         scanComments(file),
         extractFunctions(file),
+        scanBloat(file, config.maxFunctionLines),
       ]);
       allCommentIssues.push(...comments);
+      allBloatIssues.push(...bloat);
       allFunctions = allFunctions.concat(funcs);
     }),
   );
 
-  // --- STEP 3: Deep Audit (AST Duplicates) ---
+  // --- Step 3: Find duplicates ---
   const duplicateClusters = findDuplicates(allFunctions);
   const summary = calculateAuditSummary(allCommentIssues, duplicateClusters);
 
   s.stop('Scan complete!');
 
-  // --- STEP 4: Report ---
-  renderReport(allCommentIssues, duplicateClusters, summary, options.verbose);
+  const scanMeta = {
+    scannedFiles: files.length,
+    scannedDirs: targetDir,
+    durationMs: Date.now() - startTime,
+  };
 
+  // --- Step 4: Report ---
+  renderReport(allCommentIssues, duplicateClusters, summary, config.verbose);
+
+  if (allBloatIssues.length > 0 && config.verbose) {
+    for (const b of allBloatIssues) {
+      renderMessage(
+        `  📏 ${b.filePath}:${b.line} — ${b.name}() is ${b.lines} lines (limit: ${config.maxFunctionLines})`,
+        'warn',
+      );
+    }
+  }
+
+  if (config.verbose) {
+    renderFileBreakdown(allCommentIssues, duplicateClusters);
+  }
+
+  // --- Handle JSON/CSV output ---
+  if (config.outputFormat === 'json') {
+    const json = renderJsonReport(allCommentIssues, duplicateClusters, summary, null, scanMeta);
+    if (config.outputFile) {
+      const { writeFile } = await import('fs/promises');
+      await writeFile(config.outputFile, json, 'utf-8');
+      renderMessage(`Report written to ${config.outputFile}`, 'success');
+    } else {
+      console.log(json);
+    }
+    process.exit(summary.severity === 'critical' ? 1 : 0);
+  }
+
+  // --- Exit if nothing to fix ---
   if (allCommentIssues.length === 0 && duplicateClusters.length === 0) {
-    renderOutro('Zero bloat found. Your codebase is pristine!');
+    renderOutro('Zero bloat — pristine!');
     process.exit(0);
   }
 
-  if (options.noFix) {
-    renderMessage('Scan complete. Use without --no-fix to run AI-powered fixes.', 'info');
-    renderOutro('Run code-debloater again without --scan-only to auto-fix.');
-    process.exit(0);
+  if (config.scanOnly) {
+    renderMessage('Scan complete. Run without --scan-only to auto-fix.', 'info');
+    renderOutro('code-debloater — audit finished.');
+    process.exit(summary.severity === 'high' || summary.severity === 'critical' ? 1 : 0);
   }
 
-  // --- STEP 5: Check config (NVIDIA API key) ---
-  if (!config) {
+  // --- Step 5: Load NIM config ---
+  let nimConfig: NIMConfig;
+  try {
+    nimConfig = loadNimConfig();
+    if (config.model) nimConfig.model = config.model;
+  } catch (err) {
     renderMessage(
-      'NVIDIA_API_KEY not set. Set it to enable AI-powered fixes:\n' +
-        '  export NVIDIA_API_KEY=nvapi-...\n' +
-        'Get your key from https://integrate.nvidia.com',
+      err instanceof Error ? err.message : 'Failed to load NVIDIA NIM config',
       'error',
     );
-    renderOutro('Fix aborted — missing API key.');
     process.exit(1);
   }
 
-  // --- STEP 6: Fix prompt ---
-  const wantsFix = await promptForFix(config.model);
+  // --- Step 6: Prompt for fix ---
+  const shouldFix = config.autoFix ? true : await promptForFix(nimConfig.model);
 
-  if (!wantsFix) {
+  if (!shouldFix) {
     renderMessage('No fixes applied.', 'info');
-    renderOutro('Run again anytime to fix issues.');
+    renderOutro('Run again anytime.');
     process.exit(0);
   }
 
-  if (options.dryRun) {
-    renderMessage('🔍 DRY RUN — no files will be modified.', 'info');
+  if (config.dryRun) {
+    renderMessage('🔍 DRY RUN — no files will be modified.', 'warn');
   }
 
-  // --- STEP 7: Execute fixes ---
-  s.start('Fixing placeholders with NVIDIA NIM (DeepSeek V4 Pro)...');
-  let fixCount = 0;
-  let errorCount = 0;
+  // --- Step 7: Fix placeholders ---
+  const items = allCommentIssues.map((issue) => ({
+    path: issue.filePath,
+    line: issue.line,
+    text: issue.text,
+  }));
 
-  for (const issue of allCommentIssues) {
-    const shortPath = issue.filePath.split('/').pop() || issue.filePath;
-    s.message(`Fixing placeholder in ${shortPath}...`);
+  if (items.length > 0) {
+    s.start(`Fixing ${items.length} placeholders via ${nimConfig.model}...`);
 
-    if (options.verbose) {
-      renderMessage(`  ${issue.filePath}:${issue.line} — ${issue.text.slice(0, 60)}`, 'info');
-    }
+    const results = await runFixes(items, nimConfig, config.dryRun, config.maxConcurrent, (done, total, current) => {
+      s.message(`Fixing placeholders (${done}/${total}) — ${current}`);
+    });
 
-    if (!options.dryRun) {
-      try {
-        const updated = await fixPlaceholder(issue.filePath, issue.line, issue.text, config);
-        // Write is handled inside fixPlaceholder — but we refactored to return
-        // the content so we control the write. Let's write it here.
-        const { writeFile } = await import('fs/promises');
-        await writeFile(issue.filePath, updated, 'utf-8');
-        fixCount++;
-        renderMessage(`  ✅ Fixed placeholder in ${issue.filePath}`, 'success');
-      } catch (err) {
-        errorCount++;
-        renderMessage(
-          `  ❌ Failed to fix ${issue.filePath}:${issue.line} — ${err instanceof Error ? err.message : String(err)}`,
-          'error',
-        );
+    s.stop('Placeholder fixes complete.');
+
+    // Render diffs in dry-run mode
+    if (config.dryRun) {
+      for (const r of results) {
+        if (r.status === 'skipped' && r.originalContent && r.newContent) {
+          renderDiff(r.filePath, r.originalContent, r.newContent);
+        }
       }
-    } else {
-      fixCount++;
-      renderMessage(`  [DRY RUN] Would fix ${issue.filePath}:${issue.line}`, 'info');
     }
+
+    renderFixSummary(results);
   }
 
-  s.stop(options.dryRun ? 'Dry-run placeholder analysis complete.' : 'Placeholder fixes complete.');
-
-  // --- STEP 8: Duplicate refactoring strategies ---
+  // --- Step 8: Analyze duplicates ---
   if (duplicateClusters.length > 0) {
-    s.start('Analyzing duplicate logic clusters...');
-
-    // We need to read the actual source to send as context
-    const { readFile } = await import('fs/promises');
+    s.start('Analyzing duplicate logic...');
 
     for (let i = 0; i < duplicateClusters.length; i++) {
       const cluster = duplicateClusters[i];
@@ -240,53 +197,17 @@ async function main(): Promise<void> {
 
       s.message(`Analyzing duplicate cluster #${i + 1}...`);
 
-      if (options.verbose) {
-        renderMessage(
-          `  Cluster #${i + 1}: ${fn1.name}() in ${fn1.filePath} ↔ ${fn2.name}() in ${fn2.filePath}`,
-          'info',
+      try {
+        const strategy = await analyzeDuplicateCluster(
+          { filePath: fn1.filePath, line: fn1.line, name: fn1.name },
+          { filePath: fn2.filePath, line: fn2.line, name: fn2.name },
+          nimConfig,
         );
-      }
-
-      if (!options.dryRun) {
-        try {
-          // Read surrounding context for better analysis
-          const content1 = await readFile(fn1.filePath, 'utf-8');
-          const content2 = await readFile(fn2.filePath, 'utf-8');
-          // Extract just the function lines (roughly — we don't have precise ranges,
-          // so send the function names for the model to locate)
-          const context1 = content1.slice(
-            Math.max(0, fn1.line - 5),
-            fn1.line + 30,
-          );
-          const context2 = content2.slice(
-            Math.max(0, fn2.line - 5),
-            fn2.line + 30,
-          );
-
-          const strategy = await analyzeDuplicate(
-            fn1.filePath,
-            fn1.line,
-            fn1.name,
-            context1,
-            fn2.filePath,
-            fn2.line,
-            fn2.name,
-            context2,
-            config,
-          );
-
-          renderMessage(`\n📐 Refactor Strategy — Cluster #${i + 1}:${strategy}`, 'info');
-        } catch (err) {
-          errorCount++;
-          renderMessage(
-            `  ❌ Failed to analyze duplicate cluster #${i + 1}: ${err instanceof Error ? err.message : String(err)}`,
-            'error',
-          );
-        }
-      } else {
+        renderMessage(`\n📐 Refactor Strategy — Cluster #${i + 1}:${strategy}`, 'info');
+      } catch (err) {
         renderMessage(
-          `  [DRY RUN] Would analyze: ${fn1.name}() ↔ ${fn2.name}()`,
-          'info',
+          `  ❌ Analysis failed for cluster #${i + 1}: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
         );
       }
     }
@@ -294,20 +215,10 @@ async function main(): Promise<void> {
     s.stop('Duplicate analysis complete.');
   }
 
-  // --- Summary ---
-  if (options.dryRun) {
-    renderMessage(
-      `Dry run complete: ${fixCount} placeholders would be fixed, ${duplicateClusters.length} duplicate clusters would be analyzed.`,
-      'success',
-    );
-  } else if (fixCount > 0 || errorCount > 0) {
-    renderMessage(
-      `${fixCount} placeholders fixed, ${duplicateClusters.length} duplicate clusters analyzed, ${errorCount} errors.`,
-      'success',
-    );
-  }
-
-  renderOutro('Your code is now leaner and meaner!');
+  // --- Done ---
+  const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+  renderMessage(`Completed in ${totalTime}s across ${files.length} files.`, 'success');
+  renderOutro('Leaner, meaner, cleaner!');
 }
 
 main().catch((err) => {

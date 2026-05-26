@@ -1,7 +1,7 @@
 {
   "name": "code-debloater",
   "version": "1.0.0",
-  "description": "AST-driven structural code-bloat scanner powered by NVIDIA NIM (DeepSeek V4 Pro) that detects duplicate logic, lazy placeholders, and AI-generated stubs — then auto-fixes them.",
+  "description": "AST-driven structural code-bloat scanner powered by NVIDIA NIM (DeepSeek V4 Pro) — detects duplicate logic, lazy placeholders, and AI-generated stubs then auto-fixes them. Forked from zenapta/BloatHunter.",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",
+    "minimatch": "^10.0.1",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
@@ -47,6 +48,8 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
-  ]
+  ],
+  "author": "houseofmates (forked from zenapta/BloatHunter by Shashank Bhardwaj)"
 }

@@ -1,4 +1,5 @@
 import { readFile, writeFile } from 'fs/promises';
+import { setTimeout as sleep } from 'timers/promises';
 
 export interface NIMConfig {
   apiKey: string;
@@ -43,49 +44,86 @@ interface NIMResponse {
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }
 
-async function queryNIM(
+/**
+ * Query NVIDIA NIM with retry logic and rate-limit handling.
+ * Retries on 429 (rate limit), 5xx (server errors), and network failures.
+ */
+export async function queryNIM(
   config: NIMConfig,
   systemPrompt: string,
   userPrompt: string,
+  retries: number = 3,
 ): Promise<string> {
-  const response = await fetch(config.baseUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: config.temperature,
-      max_tokens: config.maxTokens,
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => '(no body)');
-    const truncated = body.length > 500 ? body.slice(0, 500) + '…' : body;
-    throw new Error(
-      `NVIDIA NIM API error ${response.status} ${response.statusText}\n${truncated}`,
-    );
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(config.baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: config.temperature,
+          max_tokens: config.maxTokens,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+
+      if (response.ok) {
+        const data = (await response.json()) as NIMResponse;
+        const content = data.choices?.[0]?.message?.content?.trim() || '';
+        return content.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/gm, '$1').trim();
+      }
+
+      // Rate limited or server error — retry
+      if (response.status === 429 || response.status >= 500) {
+        if (attempt < retries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 500, 30_000);
+          await sleep(delay);
+          continue;
+        }
+      }
+
+      // Other errors (4xx) — throw immediately
+      const body = await response.text().catch(() => '(no body)');
+      const truncated = body.length > 500 ? body.slice(0, 500) + '…' : body;
+      throw new Error(
+        `NVIDIA NIM API error ${response.status} ${response.statusText}\n${truncated}`,
+      );
+    } catch (err) {
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        if (attempt < retries) {
+          const delay = 2000 * (attempt + 1);
+          await sleep(delay);
+          continue;
+        }
+        throw new Error(`NIM request timed out after ${retries + 1} attempts`);
+      }
+      if (err instanceof Error && 'code' in err && (err as any).code === 'ECONNRESET') {
+        if (attempt < retries) {
+          await sleep(1000 * (attempt + 1));
+          continue;
+        }
+      }
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt >= retries) break;
+      await sleep(1000 * (attempt + 1));
+    }
   }
 
-  const data = (await response.json()) as NIMResponse;
-  const content = data.choices?.[0]?.message?.content?.trim() || '';
-
-  // Strip markdown code fences if the model wraps its output
-  return content.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/gm, '$1').trim();
+  throw lastError || new Error('NIM query failed after all retries');
 }
 
 /**
- * Replaces a placeholder comment / lazy stub line with real implementation
- * by sending the full file context to DeepSeek V4 Pro via NVIDIA NIM.
- * Returns the rewritten file content.
+ * Replaces a placeholder comment with real implementation via NIM.
  */
 export async function fixPlaceholder(
   filePath: string,
@@ -123,8 +161,7 @@ Replace the placeholder with real production code. Output the entire updated fil
 }
 
 /**
- * Analyzes two structurally duplicate functions and returns a concrete
- * refactoring strategy for merging them into a shared helper.
+ * Analyzes two structurally duplicate functions and returns a refactoring strategy.
  */
 export async function analyzeDuplicate(
   file1: string,

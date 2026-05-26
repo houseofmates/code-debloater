@@ -1,6 +1,6 @@
 import { readFile } from 'fs/promises';
-import { extname } from 'node:path';
 import ts from 'typescript';
+import { getScriptKind, resolveFunctionName } from './astUtils.js';
 
 export interface FunctionInfo {
   name: string;
@@ -9,105 +9,52 @@ export interface FunctionInfo {
   normalizedBody: string;
 }
 
-const SCRIPT_KINDS: Record<string, ts.ScriptKind> = {
-  '.ts': ts.ScriptKind.TS,
-  '.tsx': ts.ScriptKind.TSX,
-  '.js': ts.ScriptKind.JS,
-  '.jsx': ts.ScriptKind.JSX
-};
-
-function getScriptKind(filePath: string): ts.ScriptKind {
-  return SCRIPT_KINDS[extname(filePath).toLowerCase()] ?? ts.ScriptKind.JS;
-}
-
-function resolveFunctionName(node: ts.Node): string {
-  if (ts.isFunctionDeclaration(node) && node.name) {
-    return node.name.text;
-  }
-
-  if (ts.isMethodDeclaration(node) && ts.isIdentifier(node.name)) {
-    return node.name.text;
-  }
-
-  if (ts.isFunctionExpression(node) || ts.isArrowFunction(node)) {
-    const parent = node.parent;
-
-    if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) {
-      return parent.name.text;
-    }
-
-    if (ts.isPropertyAssignment(parent) && ts.isIdentifier(parent.name)) {
-      return parent.name.text;
-    }
-
-    if (ts.isPropertyAssignment(parent) && ts.isStringLiteral(parent.name)) {
-      return parent.name.text;
-    }
-
-    if (ts.isBinaryExpression(parent) && ts.isPropertyAccessExpression(parent.left)) {
-      return parent.left.name.text;
-    }
-  }
-
-  return 'anonymous';
-}
-
 function normalizeFunctionBody(node: ts.Node, sourceFile: ts.SourceFile): string {
   const identifierMap = new Map<string, string>();
   let identifierCounter = 0;
 
-  function getIdentifierPlaceholder(text: string): string {
+  function getId(text: string): string {
     if (!identifierMap.has(text)) {
       identifierMap.set(text, `__id${++identifierCounter}`);
     }
     return identifierMap.get(text)!;
   }
 
-  function isPreservedIdentifier(child: ts.Identifier): boolean {
-    const parent = child.parent;
+  function isPreserved(child: ts.Identifier): boolean {
+    const p = child.parent;
     return (
-      (ts.isPropertyAccessExpression(parent) && parent.name === child) ||
-      (ts.isPropertyAssignment(parent) && parent.name === child) ||
-      (ts.isShorthandPropertyAssignment(parent) && parent.name === child) ||
-      (ts.isPropertySignature(parent) && parent.name === child) ||
-      (ts.isMethodDeclaration(parent) && parent.name === child) ||
-      (ts.isMethodSignature(parent) && parent.name === child) ||
-      ts.isQualifiedName(parent)
+      (ts.isPropertyAccessExpression(p) && p.name === child) ||
+      (ts.isPropertyAssignment(p) && p.name === child) ||
+      (ts.isShorthandPropertyAssignment(p) && p.name === child) ||
+      (ts.isPropertySignature(p) && p.name === child) ||
+      (ts.isMethodDeclaration(p) && p.name === child) ||
+      (ts.isMethodSignature(p) && p.name === child) ||
+      ts.isQualifiedName(p)
     );
   }
 
   const transformer = (context: ts.TransformationContext) => {
     const visitor = (child: ts.Node): ts.VisitResult<ts.Node> => {
       if (ts.isIdentifier(child)) {
-        if (isPreservedIdentifier(child)) {
-          return child;
-        }
-        return ts.factory.createIdentifier(getIdentifierPlaceholder(child.text));
+        return isPreserved(child) ? child : ts.factory.createIdentifier(getId(child.text));
       }
-
       if (ts.isStringLiteral(child) || ts.isNoSubstitutionTemplateLiteral(child)) {
         return ts.factory.createStringLiteral('__str');
       }
-
       if (ts.isNumericLiteral(child)) {
         return ts.factory.createNumericLiteral('0');
       }
-
       if (ts.isBigIntLiteral(child)) {
         return ts.factory.createBigIntLiteral('0n');
       }
-
       if (ts.isRegularExpressionLiteral(child)) {
         return ts.factory.createRegularExpressionLiteral('/_/');
       }
-
       if (ts.isTemplateExpression(child)) {
         return ts.factory.createStringLiteral('__template');
       }
-
       return ts.visitEachChild(child, visitor, context);
     };
-
     return (root: ts.Node) => ts.visitNode(root, visitor);
   };
 
@@ -119,59 +66,38 @@ function normalizeFunctionBody(node: ts.Node, sourceFile: ts.SourceFile): string
 }
 
 /**
- * Parses a JS/TS file using the TypeScript Compiler API and extracts its functions.
+ * Parses a JS/TS file and extracts its function bodies with AST-normalized forms.
  */
 export async function extractFunctions(filePath: string): Promise<FunctionInfo[]> {
   const functions: FunctionInfo[] = [];
 
   try {
     const content = await readFile(filePath, 'utf-8');
-    const scriptKind = getScriptKind(filePath);
+    const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, getScriptKind(filePath));
 
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      content,
-      ts.ScriptTarget.Latest,
-      true,
-      scriptKind
-    );
-
-    const parseDiagnostics = (sourceFile as unknown as { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics;
-
-    if (parseDiagnostics && parseDiagnostics.length > 0) {
-      const diagnostics = parseDiagnostics
-        .map((diagnostic: ts.Diagnostic) => diagnostic.messageText.toString())
-        .join('; ');
-      console.warn(`Warning: ${filePath} has parse issues; function extraction will continue: ${diagnostics}`);
+    const parseDiags = (sourceFile as any).parseDiagnostics;
+    if (parseDiags?.length > 0) {
+      const msg = parseDiags.map((d: ts.Diagnostic) => d.messageText.toString()).join('; ');
+      console.warn(`Warning: ${filePath} has parse issues: ${msg}`);
     }
 
     function visitor(node: ts.Node) {
-      if (
-        ts.isFunctionDeclaration(node) ||
-        ts.isMethodDeclaration(node) ||
-        ts.isArrowFunction(node) ||
-        ts.isFunctionExpression(node)
-      ) {
-        const name = resolveFunctionName(node);
-
+      if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
         if (node.body) {
-          const normalizedBody = normalizeFunctionBody(node.body, sourceFile);
+          const normalized = normalizeFunctionBody(node.body, sourceFile);
           const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-
-          if (normalizedBody.length > 16) {
+          if (normalized.length > 16) {
             functions.push({
-              name,
+              name: resolveFunctionName(node),
               filePath,
               line: line + 1,
-              normalizedBody
+              normalizedBody: normalized,
             });
           }
         }
       }
-
       ts.forEachChild(node, visitor);
     }
-
     visitor(sourceFile);
   } catch (error) {
     console.warn(`Failed to extract functions from ${filePath}: ${error}`);
@@ -181,18 +107,16 @@ export async function extractFunctions(filePath: string): Promise<FunctionInfo[]
 }
 
 /**
- * Clusters matching structural functions together to pinpoint identical duplicates.
+ * Cluster functions by their normalized AST body to find structural duplicates.
  */
 export function findDuplicates(allFunctions: FunctionInfo[]): FunctionInfo[][] {
-  const clusters: { [key: string]: FunctionInfo[] } = {};
-
+  const clusters = new Map<string, FunctionInfo[]>();
   for (const fn of allFunctions) {
-    const key = fn.normalizedBody;
-    clusters[key] = clusters[key] ?? [];
-    clusters[key].push(fn);
+    const existing = clusters.get(fn.normalizedBody) || [];
+    existing.push(fn);
+    clusters.set(fn.normalizedBody, existing);
   }
-
-  return Object.values(clusters)
-    .filter((cluster) => cluster.length > 1)
+  return [...clusters.values()]
+    .filter((c) => c.length > 1)
     .sort((a, b) => b.length - a.length);
 }
