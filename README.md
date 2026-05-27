@@ -189,7 +189,9 @@ NVIDIA_API_KEY=nvapi-... npm run start -- --dry-run ./test-sandbox
 
 <h2 align="center">license</h2>
 
-<p align="center">mit — do whatever you want with it.</p>
+<div align="center">
+  <a href="./LICENSE">MIT license</a>
+</div>
 
 <h3 align="center">credits</h3>
 
